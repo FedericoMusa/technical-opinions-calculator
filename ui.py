@@ -3,17 +3,19 @@ import tkinter as tk
 from ttkbootstrap.constants import *
 from decimal import Decimal
 from tkinter import messagebox, filedialog
-# Importing from our translated module
+import csv
+
+# Importing sanitized logic and configuration
 from calculations import calculate_unit_amount, calculate_subtotal, calculate_total
 import config as cfg
 
-# Configuration Mappings
+# --- Configuration & Safety Fallbacks ---
 MOE_ITEMS = getattr(cfg, "MOE_ITEMS", {})
 UF_VALUE = getattr(cfg, "UF_VALUE", 420)
 DEFAULT_INDEX = getattr(cfg, "DEFAULT_INDEX", 1.6)
 
 def format_currency_ars(value: Decimal) -> str:
-    """Formats a Decimal value into a standard ARS currency string."""
+    """Formats a Decimal value into a professional ARS currency string ($1.234,56)."""
     integer_part, _, decimal_part = f"{value:.2f}".partition(".")
     formatted_integer = "{:,}".format(int(integer_part)).replace(",", ".")
     return f"${formatted_integer},{decimal_part}"
@@ -21,39 +23,48 @@ def format_currency_ars(value: Decimal) -> str:
 class CalculatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Technical Opinions Calculator")
-        self.root.geometry("980x720")
+        self.root.title("Technical Opinions Calculator | Industrial Audit Tool")
+        self.root.geometry("1024x768")
 
-        title_label = ttk.Label(
-            self.root,
-            text="Technical Opinions Calculator",
-            font=("Segoe UI", 16, "bold"),
-        )
-        title_label.pack(pady=15)
+        # Header Section
+        self._create_header()
 
-        # State Variables
+        # State Management
         self.uf_value_var = tk.StringVar(value=str(UF_VALUE))
         self.index_var = tk.StringVar(value=str(DEFAULT_INDEX))
         self.quantities = {}
         self.items_flat = {}
+        self.item_widgets = []  # Tracking list for UI lifecycle management
+        self.subtotal_labels = {}
+        
         self.flatten_items()
-
-        # Build View
         self.create_interface()
         self._wire_live_updates()
 
+    def _create_header(self):
+        title_frame = ttk.Frame(self.root, bootstyle=PRIMARY)
+        title_frame.pack(fill=X, pady=(0, 20))
+        ttk.Label(
+            title_frame, 
+            text="TECHNICAL OPINIONS CALCULATOR", 
+            font=("Segoe UI", 18, "bold"),
+            bootstyle=INVERSE
+        ).pack(pady=15)
+
     def _wire_live_updates(self):
-        """Traces changes to trigger real-time recalculations."""
+        """Observer pattern: triggers recalculations on config changes."""
         self.uf_value_var.trace_add("write", lambda *_: self.calculate_final_total())
         self.index_var.trace_add("write", lambda *_: self.calculate_final_total())
 
     def _decimal_from_var(self, var: tk.StringVar, default="0"):
+        """Sanitizes UI string input into Decimal for financial precision."""
         try:
             return Decimal(var.get().strip().replace(",", "."))
         except Exception:
             return Decimal(default)
 
     def flatten_items(self):
+        """Maps hierarchical categories into a flat reference dictionary."""
         for category, items in MOE_ITEMS.items():
             if isinstance(items, dict):
                 for item_name, uf_val in items.items():
@@ -63,147 +74,180 @@ class CalculatorApp:
 
     def create_interface(self):
         main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=BOTH, expand=True, padx=10, pady=5)
+        main_frame.pack(fill=BOTH, expand=True, padx=20, pady=5)
 
-        main_frame.columnconfigure(0, minsize=280, weight=0)
+        main_frame.columnconfigure(0, minsize=300, weight=0)
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(1, weight=1)
 
-        # --- Left Column: Categories ---
-        cat_label = ttk.Label(main_frame, text="Select categories:")
-        cat_label.grid(row=0, column=0, sticky="w", padx=5, pady=(5, 0))
-
-        cat_frame = ttk.Frame(main_frame)
-        cat_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        cat_frame.rowconfigure(1, weight=1)
-        cat_frame.columnconfigure(0, weight=1)
-
+        # --- Sidebar: Category Selection ---
+        cat_frame = ttk.LabelFrame(main_frame, text=" 1. Select Categories ", padding=10)
+        cat_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        
         self.category_listbox = tk.Listbox(
-            cat_frame,
-            selectmode=tk.MULTIPLE,
-            exportselection=False,
-            height=18,
-            bg="white",
-            fg="black"
+            cat_frame, selectmode=tk.MULTIPLE, exportselection=False,
+            font=("Segoe UI", 10), bd=0, highlightthickness=0
         )
-        self.category_listbox.grid(row=0, column=0, sticky="nsew")
+        self.category_listbox.pack(side=LEFT, fill=BOTH, expand=True)
 
-        cat_scroll = ttk.Scrollbar(cat_frame, orient="vertical", command=self.category_listbox.yview)
-        cat_scroll.grid(row=0, column=1, sticky="ns")
-        self.category_listbox.config(yscrollcommand=cat_scroll.set)
+        scrollbar = ttk.Scrollbar(cat_frame, orient=VERTICAL, command=self.category_listbox.yview)
+        scrollbar.pack(side=RIGHT, fill=Y)
+        self.category_listbox.config(yscrollcommand=scrollbar.set)
 
-        self.cat_status = ttk.Label(main_frame, text="", bootstyle=INFO)
-        self.cat_status.grid(row=0, column=1, sticky="w", padx=10)
-        self.cat_status.config(text=f"{len(list(MOE_ITEMS.keys()))} categories | config.py")
-
-        # Populate and Bind
-        categories = sorted(list(MOE_ITEMS.keys()))
-        for cat in categories:
+        for cat in sorted(MOE_ITEMS.keys()):
             self.category_listbox.insert(tk.END, cat)
         self.category_listbox.bind("<<ListboxSelect>>", self.update_item_rows)
 
-        # --- Right Column: Items ---
-        self.items_frame = ttk.Frame(main_frame)
-        self.items_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
+        # --- Main Workspace: Dynamic Item Grid ---
+        work_frame = ttk.LabelFrame(main_frame, text=" 2. Set Quantities & Review Audit ", padding=10)
+        work_frame.grid(row=1, column=1, sticky="nsew")
 
-        headers = ["Item", "UF", "Qty", "Subtotal (ARS)"]
-        for col, text in enumerate(headers):
-            ttk.Label(self.items_frame, text=text, font=("Segoe UI", 10, "bold")).grid(row=0, column=col, padx=5, sticky="w")
+        # Scrollable container for items
+        self.canvas = tk.Canvas(work_frame, highlightthickness=0)
+        self.items_inner_frame = ttk.Frame(self.canvas)
+        self.scroll_y = ttk.Scrollbar(work_frame, orient=VERTICAL, command=self.canvas.yview)
+        
+        self.canvas.configure(yscrollcommand=self.scroll_y.set)
+        self.scroll_y.pack(side=RIGHT, fill=Y)
+        self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        self.canvas_window = self.canvas.create_window((0,0), window=self.items_inner_frame, anchor="nw")
 
-        self.subtotal_labels = {}
-        self.item_rows = []
+        self.items_inner_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
-        # --- Settings ---
-        controls_frame = ttk.LabelFrame(main_frame, text="Configuration", padding=10)
-        controls_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=5, pady=10)
+        # --- Footer: Configuration & Results ---
+        footer = ttk.Frame(self.root, padding=20)
+        footer.pack(fill=X)
 
-        ttk.Label(controls_frame, text="UF Value:").grid(row=0, column=0, padx=5)
-        ttk.Entry(controls_frame, textvariable=self.uf_value_var, width=12).grid(row=0, column=1, padx=5)
+        # Config Inputs
+        config_box = ttk.Frame(footer)
+        config_box.pack(side=LEFT)
+        ttk.Label(config_box, text="UF Value:").pack(side=LEFT, padx=5)
+        ttk.Entry(config_box, textvariable=self.uf_value_var, width=10).pack(side=LEFT, padx=5)
+        ttk.Label(config_box, text="Index:").pack(side=LEFT, padx=5)
+        ttk.Entry(config_box, textvariable=self.index_var, width=10).pack(side=LEFT, padx=5)
 
-        ttk.Label(controls_frame, text="Index:").grid(row=0, column=2, padx=5)
-        ttk.Entry(controls_frame, textvariable=self.index_var, width=12).grid(row=0, column=3, padx=5)
+        # Results & Actions
+        actions_box = ttk.Frame(footer)
+        actions_box.pack(side=RIGHT)
+        self.total_label = ttk.Label(actions_box, text="Total: $0,00", font=("Segoe UI", 16, "bold"), bootstyle=SUCCESS)
+        self.total_label.pack(side=TOP, anchor="e", pady=(0, 10))
+        
+        ttk.Button(actions_box, text="Export Audit (CSV)", command=self.export_csv, bootstyle=OUTLINE).pack(side=RIGHT, padx=5)
+        ttk.Button(actions_box, text="Reset", command=self.reset, bootstyle=DANGER).pack(side=RIGHT, padx=5)
 
-        # --- Buttons ---
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=3, column=0, columnspan=2, pady=15)
-
-        # HERE WAS THE ERROR: Method name must match exactly
-        ttk.Button(btn_frame, text="Calculate Total", command=self.calculate_final_total, style="success.TButton").pack(side="left", padx=8)
-        ttk.Button(btn_frame, text="Reset", command=self.reset, style="secondary.TButton").pack(side="left", padx=8)
-        ttk.Button(btn_frame, text="Export CSV", command=self.export_csv).pack(side="left", padx=8)
-
-        self.total_label = ttk.Label(btn_frame, text="Final Total: $0,00", font=("Segoe UI", 14, "bold"), foreground="green")
-        self.total_label.pack(side="left", padx=20)
-
-    # ------------ Logic Methods ------------
-    def update_item_rows(self, event=None):
-        for widgets in self.item_rows:
-            for w in widgets: w.destroy()
-        self.item_rows.clear()
-        self.subtotal_labels.clear()
+    def update_item_rows(self, *args):
+        """Lifecycle: Clears and rebuilds the grid ensuring object destruction."""
+        for widget in self.item_widgets:
+            if hasattr(widget, 'destroy'):
+                widget.destroy()
+        
+        self.item_widgets.clear()
         self.quantities.clear()
+        self.subtotal_labels.clear()
 
-        indices = self.category_listbox.curselection()
-        selected = [self.category_listbox.get(i) for i in indices]
+        selected_indices = self.category_listbox.curselection()
+        
+        # Grid Headers
+        headers = ["Item Description", "UF", "Quantity", "Subtotal (ARS)"]
+        for col, text in enumerate(headers):
+            h_lbl = ttk.Label(self.items_inner_frame, text=text, font=("Segoe UI", 9, "bold"))
+            h_lbl.grid(row=0, column=col, padx=15, pady=10, sticky="w")
+            self.item_widgets.append(h_lbl)
 
         row = 1
-        for cat in selected:
-            items = MOE_ITEMS[cat]
+        for idx in selected_indices:
+            category = self.category_listbox.get(idx)
+            items = MOE_ITEMS.get(category, {})
+            
             if isinstance(items, dict):
-                for name, uf in items.items():
-                    self._create_row(row, name, uf)
+                for item_name, uf_val in sorted(items.items()):
+                    self._create_row(row, item_name, uf_val)
                     row += 1
             else:
-                self._create_row(row, cat, items)
+                self._create_row(row, category, items)
                 row += 1
+
         self.calculate_final_total()
 
     def _create_row(self, row, name, uf):
-        ttk.Label(self.items_frame, text=name).grid(row=row, column=0, sticky="w", padx=5)
-        ttk.Label(self.items_frame, text=str(uf)).grid(row=row, column=1, padx=5)
+        """Internal helper to build dynamic UI rows and track widgets."""
+        lbl_name = ttk.Label(self.items_inner_frame, text=name, wraplength=400)
+        lbl_name.grid(row=row, column=0, sticky="w", padx=15, pady=5)
+        
+        lbl_uf = ttk.Label(self.items_inner_frame, text=f"{uf} UF")
+        lbl_uf.grid(row=row, column=1, padx=15)
         
         q_var = tk.IntVar(value=0)
-        ttk.Spinbox(self.items_frame, from_=0, to=999, width=6, textvariable=q_var).grid(row=row, column=2, padx=5)
+        sb_qty = ttk.Spinbox(self.items_inner_frame, from_=0, to=999, width=8, textvariable=q_var)
+        sb_qty.grid(row=row, column=2, padx=15)
         q_var.trace_add("write", lambda *_: self.calculate_final_total())
-        self.quantities[name] = q_var
+        
+        lbl_sub = ttk.Label(self.items_inner_frame, text="$0,00", font=("Consolas", 10))
+        lbl_sub.grid(row=row, column=3, padx=15, sticky="e")
 
-        lbl = ttk.Label(self.items_frame, text="$0,00")
-        lbl.grid(row=row, column=3, padx=5)
-        self.subtotal_labels[name] = lbl
-        self.item_rows.append([name, uf, q_var, lbl])
+        # CRITICAL FIX: Track all widgets for proper UI cleanup
+        self.item_widgets.extend([lbl_name, lbl_uf, sb_qty, lbl_sub])
+        self.quantities[name] = q_var
+        self.subtotal_labels[name] = lbl_sub
 
     def calculate_final_total(self):
-        """Unified method for calculating all values."""
+        """Financial engine: aggregates subtotals with high precision."""
         try:
-            subtotals = []
-            val_uf = self._decimal_from_var(self.uf_value_var)
+            subtotals_list = []
+            current_uf_price = self._decimal_from_var(self.uf_value_var)
+            
             for name, q_var in self.quantities.items():
                 qty = q_var.get()
                 uf_units = Decimal(str(self.items_flat[name]))
-                m_unit = calculate_unit_amount(uf_units, val_uf)
-                sub = calculate_subtotal(m_unit, qty)
-                subtotals.append(sub)
-                self.subtotal_labels[name].config(text=format_currency_ars(sub))
+                
+                # Using the translated calculation module
+                unit_amount = calculate_unit_amount(uf_units, current_uf_price)
+                subtotal = calculate_subtotal(unit_amount, qty)
+                
+                subtotals_list.append(subtotal)
+                self.subtotal_labels[name].config(text=format_currency_ars(subtotal))
 
-            idx = self._decimal_from_var(self.index_var, default="1")
-            res = calculate_total(subtotals, idx) if subtotals else Decimal("0")
-            self.total_label.config(text=f"Final Total: {format_currency_ars(res)}")
-        except Exception as e:
-            pass # Silent fail for live updates, but you could add a logger here
+            current_index = self._decimal_from_var(self.index_var, default="1")
+            final_res = calculate_total(subtotals_list, current_index) if subtotals_list else Decimal("0")
+            
+            self.total_label.config(text=f"Total: {format_currency_ars(final_res)}")
+        except Exception:
+            pass 
 
     def reset(self):
-        for v in self.quantities.values(): v.set(0)
+        """Clears all user input to default state."""
+        for v in self.quantities.values():
+            v.set(0)
         self.calculate_final_total()
 
     def export_csv(self):
-        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
-        if not path: return
+        """Administrative traceability: exports the current calculation audit."""
+        file_path = filedialog.asksaveasfilename(
+            title="Export Industrial Audit",
+            defaultextension=".csv",
+            filetypes=[("CSV (Comma delimited)", "*.csv")]
+        )
+        if not file_path:
+            return
+            
         try:
-            import csv
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f, delimiter=";")
-                w.writerow(["Item", "UF", "Qty", "Total"])
-                # Add data logic here as needed
-            messagebox.showinfo("Success", "File exported.")
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f, delimiter=";")
+                writer.writerow(["AUDIT REPORT - TECHNICAL OPINIONS"])
+                writer.writerow(["Item Description", "UF Units", "Quantity", "Subtotal (ARS)"])
+                
+                current_uf = self.uf_value_var.get()
+                for name, q_var in self.quantities.items():
+                    qty = q_var.get()
+                    if qty > 0:
+                        sub = self.subtotal_labels[name].cget("text")
+                        writer.writerow([name, self.items_flat[name], qty, sub])
+                
+                writer.writerow([])
+                writer.writerow(["Configured UF Value", current_uf])
+                writer.writerow(["Applied Index", self.index_var.get()])
+                writer.writerow(["FINAL AUDIT TOTAL", self.total_label.cget("text")])
+                
+            messagebox.showinfo("Audit Exported", f"Report successfully saved to:\n{file_path}")
         except Exception as e:
-            messagebox.showerror("Error", str(e))
+            messagebox.showerror("Export Error", f"Traceback: {str(e)}")
