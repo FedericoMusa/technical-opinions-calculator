@@ -10,8 +10,7 @@ The primary objective was to **eliminate human error** and remove hardcoded pric
 ## 🛠️ Tech Stack & Design Decisions
 * **Language:** Python 3.13+.
 * **GUI:** `ttkbootstrap` (Modern Tkinter enhancement for professional UI).
-* **Data Handling:** `csv` (For detailed administrative report exports and traceability).
-
+Data Reporting: openpyxl (Automated generation of professionally formatted .xlsx Excel reports with styling, formulas, and auto-adjusted columns for executive review).
 ## ⚙️ Engineering Key Points
 * **Financial Precision (Decimal vs. Float):** Implemented the `decimal.Decimal` module with **banker's rounding** (`ROUND_HALF_UP`). This avoids floating-point errors common in float types, which is critical for monetary and regulatory calculations.
 * **Decoupled Architecture (Separation of Concerns):**
