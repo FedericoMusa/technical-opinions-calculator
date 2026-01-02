@@ -3,7 +3,9 @@ import tkinter as tk
 from ttkbootstrap.constants import *
 from decimal import Decimal
 from tkinter import messagebox, filedialog
-import csv
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Importing sanitized logic and configuration
 from calculations import calculate_unit_amount, calculate_subtotal, calculate_total
@@ -132,7 +134,7 @@ class CalculatorApp:
         self.total_label = ttk.Label(actions_box, text="Total: $0,00", font=("Segoe UI", 16, "bold"), bootstyle=SUCCESS)
         self.total_label.pack(side=TOP, anchor="e", pady=(0, 10))
         
-        ttk.Button(actions_box, text="Export Audit (CSV)", command=self.export_csv, bootstyle=OUTLINE).pack(side=RIGHT, padx=5)
+        ttk.Button(actions_box, text="Export Excel (.xlsx)", command=self.export_excel, bootstyle=SUCCESS).pack(side=RIGHT, padx=5)
         ttk.Button(actions_box, text="Reset", command=self.reset, bootstyle=DANGER).pack(side=RIGHT, padx=5)
 
     def update_item_rows(self, *args):
@@ -220,34 +222,83 @@ class CalculatorApp:
             v.set(0)
         self.calculate_final_total()
 
-    def export_csv(self):
-        """Administrative traceability: exports the current calculation audit."""
+    def export_excel(self):
+        """Generates a Professional .xlsx Report with formatting."""
         file_path = filedialog.asksaveasfilename(
-            title="Export Industrial Audit",
-            defaultextension=".csv",
-            filetypes=[("CSV (Comma delimited)", "*.csv")]
+            title="Export Professional Audit",
+            defaultextension=".xlsx",
+            filetypes=[("Excel Files", "*.xlsx")]
         )
         if not file_path:
             return
-            
+
         try:
-            with open(file_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f, delimiter=";")
-                writer.writerow(["AUDIT REPORT - TECHNICAL OPINIONS"])
-                writer.writerow(["Item Description", "UF Units", "Quantity", "Subtotal (ARS)"])
-                
-                current_uf = self.uf_value_var.get()
-                for name, q_var in self.quantities.items():
-                    qty = q_var.get()
-                    if qty > 0:
-                        sub = self.subtotal_labels[name].cget("text")
-                        writer.writerow([name, self.items_flat[name], qty, sub])
-                
-                writer.writerow([])
-                writer.writerow(["Configured UF Value", current_uf])
-                writer.writerow(["Applied Index", self.index_var.get()])
-                writer.writerow(["FINAL AUDIT TOTAL", self.total_label.cget("text")])
-                
-            messagebox.showinfo("Audit Exported", f"Report successfully saved to:\n{file_path}")
+            # 1. Setup Workbook and Styles
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Audit Report"
+            
+            # Styles
+            header_font = Font(bold=True, color="FFFFFF", size=11)
+            header_fill = PatternFill(start_color="2c3e50", end_color="2c3e50", fill_type="solid") # Dark Blue
+            total_font = Font(bold=True, color="27ae60", size=12) # Green for money
+            center_align = Alignment(horizontal="center")
+            
+            # 2. Write Headers
+            headers = ["Item Description", "UF Units", "Quantity", "Subtotal (ARS)"]
+            ws.append(headers)
+            
+            # Apply Header Styles
+            for col_num, cell in enumerate(ws[1], 1):
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_align
+
+            # 3. Write Data
+            current_uf = self.uf_value_var.get()
+            
+            for name, q_var in self.quantities.items():
+                qty = q_var.get()
+                if qty > 0:
+                    # Get clean values for Excel math
+                    sub_text = self.subtotal_labels[name].cget("text")
+                    # Clean currency formatting for Excel number format (optional logic depending on your needs)
+                    
+                    ws.append([name, self.items_flat[name], qty, sub_text])
+
+            # 4. Add Summary Section at the bottom
+            ws.append([]) # Empty row
+            ws.append(["CONFIGURATION & TOTALS"])
+            ws["A" + str(ws.max_row)].font = Font(bold=True)
+            
+            ws.append(["Configured UF Value:", current_uf])
+            ws.append(["Applied Index:", self.index_var.get()])
+            
+            # Final Total Row
+            total_text = self.total_label.cget("text") # e.g. "Total: $1.200,00"
+            ws.append(["FINAL AUDIT TOTAL", "", "", total_text])
+            
+            # Style the Total
+            last_row = ws.max_row
+            ws[f"D{last_row}"].font = total_font
+            ws[f"D{last_row}"].alignment = Alignment(horizontal="right")
+
+            # 5. Auto-adjust Column Widths (The "Magic" touch)
+            for col in ws.columns:
+                max_length = 0
+                column = col[0].column_letter # Get the column name
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = (max_length + 2)
+                ws.column_dimensions[column].width = adjusted_width
+
+            # Save
+            wb.save(file_path)
+            messagebox.showinfo("Success", f"Professional Report saved to:\n{file_path}")
+
         except Exception as e:
-            messagebox.showerror("Export Error", f"Traceback: {str(e)}")
+            messagebox.showerror("Export Error", f"Error generating Excel:\n{str(e)}")
